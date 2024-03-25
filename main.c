@@ -124,6 +124,10 @@ int main(){
     
     WINDOW *my_win;
     enableRawMode();
+    start_color();
+    init_pair(1, COLOR_WHITE, COLOR_BLUE);
+
+
     int c;
     TextBuffer *buffer = createTextBuffer();
     int x = 0;
@@ -214,6 +218,13 @@ int main(){
             }
             break;
         }
+        attron(COLOR_PAIR(1));
+        mvprintw(height - 1, 0 , "Line: %d, Column: %d", y + scrollOffset + 1, x + 1); // Use realY for line number
+        clrtoeol();
+        attroff(COLOR_PAIR(1));
+
+        refresh();
+        
         redrawWindow(my_win, buffer, scrollOffset);
         wmove(my_win, y, x);
         wrefresh(my_win);

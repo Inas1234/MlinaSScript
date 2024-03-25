@@ -4,6 +4,7 @@
 #include <ncurses.h>
 #include <string.h>
 #include <stdbool.h>
+#include <termios.h>
 
 #define CTRL_KEY(k) ((k) & 0x1f)
 
@@ -12,8 +13,14 @@
 
 #define INITIAL_CAPACITY 1024
 
+struct termios orig_termios;
+
 int max(int a, int b) {
     return a > b ? a : b;
+}
+
+int min(int a, int b) {
+    return a < b ? a : b;
 }
 
 typedef struct {
@@ -78,7 +85,10 @@ void redrawWindow(WINDOW *win, TextBuffer *buffer, int scrollOffset) {
     int maxy, maxx;
     getmaxyx(win, maxy, maxx);
     for (int i = 0; i < maxy && (i + scrollOffset) < buffer->num_lines; i++) {
-        mvwprintw(win, i, 0, "%s",buffer->lines[i + scrollOffset]);
+        int lineNum = i + scrollOffset + 1; 
+        mvwprintw(win, i, 0, "%4d ", lineNum); 
+
+        mvwprintw(win, i, 6, "%s", buffer->lines[i + scrollOffset]); 
     }
     wrefresh(win);
 }
@@ -112,7 +122,24 @@ WINDOW *create_newwin(int height, int width, int starty, int startx){
     return local_win;
 }
 
+void disableRawMode(){
+    endwin();
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios) == -1) {
+            perror("tcsetattr");
+    }
+}
+
 void enableRawMode(){
+    tcgetattr(STDIN_FILENO, &orig_termios);
+    atexit(disableRawMode);
+
+    struct termios raw = orig_termios;
+    raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+    raw.c_oflag &= ~(OPOST);
+    raw.c_cflag |= (CS8);
+    raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+
     initscr();
     keypad(stdscr, TRUE);
     cbreak();
@@ -120,16 +147,62 @@ void enableRawMode(){
     nonl();
 }
 
-int main(){
+
+char * readfile(char *filename){
+    FILE *file = fopen(filename, "r");
+    if (!file) {
+        return NULL;
+    }
+    fseek(file, 0, SEEK_END);
+    long length = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    char *buffer = malloc(length + 1);
+    buffer[length] = '\0';
+    fread(buffer, 1, length, file);
+    fclose(file);
+    return buffer;
+}
+
+
+void readIntoBuffer(TextBuffer *buffer, char *filename) {
+    char *file = readfile(filename);
+    if (!file) return;
+
+    char *line = strtok(file, "\n");
+    while (line) {
+        if (buffer->num_lines >= buffer->capacity) {
+            buffer->capacity *= 2;
+            buffer->lines = realloc(buffer->lines, buffer->capacity * sizeof(char*));
+            for (int i = buffer->num_lines; i < buffer->capacity; i++) {
+                buffer->lines[i] = malloc(INITIAL_CAPACITY * sizeof(char));
+                buffer->lines[i][0] = '\0';
+            }
+        }
+        strcpy(buffer->lines[buffer->num_lines], line);
+        buffer->num_lines++;
+        line = strtok(NULL, "\n");
+    }
+    free(file);
+}
+
+
+int main(int argc, char **argv){
     
     WINDOW *my_win;
     enableRawMode();
     start_color();
     init_pair(1, COLOR_WHITE, COLOR_BLUE);
 
-
     int c;
+
     TextBuffer *buffer = createTextBuffer();
+    if (argc > 1) {
+        readIntoBuffer(buffer, argv[1]);
+    } else {
+        insertLine(buffer, 0);
+    }
+
+
     int x = 0;
     int y = 0;
     int scrollOffset = 0;
@@ -148,7 +221,16 @@ int main(){
         switch (c)
         {
         case ENTER:
-            insertLine(buffer, realY + 1);
+            if (buffer->lines[realY][x] != '\0') {
+                insertLine(buffer, realY + 1);
+
+                strcpy(buffer->lines[realY + 1], buffer->lines[realY] + x);
+
+                buffer->lines[realY][x] = '\0';
+            } else {
+                insertLine(buffer, realY + 1);
+            }
+
             if (y >= height - 3) {
                 scrollOffset++;
             } else {
@@ -175,21 +257,25 @@ int main(){
             }
             break;
         case KEY_UP:
-             if (y > 0) {
-                y--;
-                if (y < scrollOffset) scrollOffset--;
-                if (x > strlen(buffer->lines[y - scrollOffset])) {
-                    x = strlen(buffer->lines[y - scrollOffset]);
+            if (y > 0 || scrollOffset > 0) {
+                if (y > 0) {
+                    y--;
+                } else if (scrollOffset > 0) {
+                    scrollOffset--;
+                }
+                if (x > strlen(buffer->lines[y + scrollOffset])) {
+                    x = strlen(buffer->lines[y + scrollOffset]);
                 }
             }
             break;
         case KEY_DOWN:
-            if (y < buffer->num_lines - 1) {
-                y++;
-                if (y - scrollOffset >= height - 2) scrollOffset++;
-                if (x > strlen(buffer->lines[y - scrollOffset])) {
-                    x = strlen(buffer->lines[y - scrollOffset]);
+            if (realY < buffer->num_lines - 1) { // Ensure there's a line below
+                if (y < height - 3) {
+                    y++;
+                } else {
+                    scrollOffset++; // Scroll down only if at the bottom of the viewport
                 }
+                x = min(x, strlen(buffer->lines[realY + 1]));
             }
             break;
         case KEY_LEFT:
@@ -200,6 +286,9 @@ int main(){
             if (x < width)
                 x++;
             break;
+        case CTRL_KEY('q'):
+            disableRawMode();
+            exit(0);
         default:
             if (editing && c >= 32 && c <= 126) { 
                 insertCharacter(buffer, realY, x, c);
@@ -219,19 +308,21 @@ int main(){
             break;
         }
         attron(COLOR_PAIR(1));
-        mvprintw(height - 1, 0 , "Line: %d, Column: %d", y + scrollOffset + 1, x + 1); // Use realY for line number
+        mvprintw(height - 1, 0 , "Line: %d, Column: %d", y + scrollOffset + 1, x + 1); 
         clrtoeol();
         attroff(COLOR_PAIR(1));
 
         refresh();
         
         redrawWindow(my_win, buffer, scrollOffset);
-        wmove(my_win, y, x);
+        wmove(my_win, y, x + 6);
         wrefresh(my_win);
 
 
     }
+
     freeTextBuffer(buffer);
     endwin();
+
     return 0;
 }

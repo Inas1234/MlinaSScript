@@ -164,26 +164,62 @@ char * readfile(char *filename){
 }
 
 
-void readIntoBuffer(TextBuffer *buffer, char *filename) {
-    char *file = readfile(filename);
-    if (!file) return;
+void saveToFile(TextBuffer *buffer, char *filename) {
+    FILE *file = fopen(filename, "w");
+    if (!file) {
+        return;
+    }
+    for (int i = 0; i < buffer->num_lines; i++) {
+        fprintf(file, "%s\n", buffer->lines[i]);
+    }
+    fclose(file);
+}
 
-    char *line = strtok(file, "\n");
+
+void readIntoBuffer(TextBuffer *buffer, char *filename) {
+    char *fileContents = readfile(filename);
+    if (!fileContents) return;
+
+    char *line = strtok(fileContents, "\n");
+    int lineIndex = 0;
+
     while (line) {
-        if (buffer->num_lines >= buffer->capacity) {
+        if (lineIndex >= buffer->capacity) {
             buffer->capacity *= 2;
             buffer->lines = realloc(buffer->lines, buffer->capacity * sizeof(char*));
             for (int i = buffer->num_lines; i < buffer->capacity; i++) {
                 buffer->lines[i] = malloc(INITIAL_CAPACITY * sizeof(char));
-                buffer->lines[i][0] = '\0';
+                buffer->lines[i][0] = '\0'; 
             }
         }
-        strcpy(buffer->lines[buffer->num_lines], line);
-        buffer->num_lines++;
+
+        if (lineIndex == 0 && buffer->num_lines == 1 && buffer->lines[0][0] == '\0') {
+            strcpy(buffer->lines[lineIndex], line);
+        } else {
+            if (lineIndex >= buffer->num_lines) {
+                if (lineIndex >= buffer->capacity) {
+                    buffer->capacity *= 2; 
+                    buffer->lines = realloc(buffer->lines, buffer->capacity * sizeof(char*));
+
+                    for (int i = buffer->num_lines; i < buffer->capacity; i++) {
+                        buffer->lines[i] = malloc(INITIAL_CAPACITY * sizeof(char));
+                        buffer->lines[i][0] = '\0';
+                    }
+                }
+                buffer->num_lines = lineIndex + 1; 
+            }
+
+            strcpy(buffer->lines[lineIndex], line);
+            buffer->num_lines++; 
+        }
+
+        lineIndex++; 
         line = strtok(NULL, "\n");
     }
-    free(file);
+
+    free(fileContents);
 }
+
 
 
 int main(int argc, char **argv){
@@ -214,6 +250,8 @@ int main(int argc, char **argv){
     wmove(my_win, y, x);
     wrefresh(my_win);
     while(1){
+        bool fileSaved = false;
+
         c = getch();
 
         int realY = y + scrollOffset;
@@ -269,11 +307,11 @@ int main(int argc, char **argv){
             }
             break;
         case KEY_DOWN:
-            if (realY < buffer->num_lines - 1) { // Ensure there's a line below
+            if (realY < buffer->num_lines - 1) { 
                 if (y < height - 3) {
                     y++;
                 } else {
-                    scrollOffset++; // Scroll down only if at the bottom of the viewport
+                    scrollOffset++; 
                 }
                 x = min(x, strlen(buffer->lines[realY + 1]));
             }
@@ -289,6 +327,11 @@ int main(int argc, char **argv){
         case CTRL_KEY('q'):
             disableRawMode();
             exit(0);
+            break;
+        case CTRL_KEY('s'):
+            saveToFile(buffer, argv[1]);
+            fileSaved = true;
+            break;
         default:
             if (editing && c >= 32 && c <= 126) { 
                 insertCharacter(buffer, realY, x, c);
@@ -308,7 +351,11 @@ int main(int argc, char **argv){
             break;
         }
         attron(COLOR_PAIR(1));
-        mvprintw(height - 1, 0 , "Line: %d, Column: %d", y + scrollOffset + 1, x + 1); 
+        if (fileSaved) {
+            mvprintw(height - 1, 0, "File saved successfully to %s", argv[1]);
+        } else {
+            mvprintw(height - 1, 0 , "File: %s | Line: %d, Column: %d", argv[1], y + scrollOffset + 1, x + 1);
+        } 
         clrtoeol();
         attroff(COLOR_PAIR(1));
 

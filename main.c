@@ -5,11 +5,14 @@
 #include <string.h>
 #include <stdbool.h>
 #include <termios.h>
+#include <signal.h>
+#include <ctype.h>
 
 #define CTRL_KEY(k) ((k) & 0x1f)
 
 #define SPACE 32
 #define ENTER 13
+#define ESCAPE 27
 
 #define INITIAL_CAPACITY 1024
 
@@ -129,6 +132,9 @@ void disableRawMode(){
     }
 }
 
+void handleSigInt(int sig) {}
+
+
 void enableRawMode(){
     tcgetattr(STDIN_FILENO, &orig_termios);
     atexit(disableRawMode);
@@ -138,7 +144,28 @@ void enableRawMode(){
     raw.c_oflag &= ~(OPOST);
     raw.c_cflag |= (CS8);
     raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
+    raw.c_cc[VINTR]    = 0;
+    raw.c_cc[VQUIT]    = 0;
+    raw.c_cc[VERASE]   = 0;
+    raw.c_cc[VKILL]    = 0;
+    raw.c_cc[VEOF]     = 0;
+    raw.c_cc[VTIME]    = 0;
+    raw.c_cc[VMIN]     = 1;
+    raw.c_cc[VSWTC]    = 0;
+    raw.c_cc[VSTART]   = 0;
+    raw.c_cc[VSTOP]    = 0;
+    raw.c_cc[VSUSP]    = 0;
+    raw.c_cc[VEOL]     = 0;
+    raw.c_cc[VREPRINT] = 0;
+    raw.c_cc[VDISCARD] = 0;
+    raw.c_cc[VWERASE]  = 0;
+    raw.c_cc[VLNEXT]   = 0;
+    raw.c_cc[VEOL2]    = 0;
+
+
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+
+    //signal(SIGINT, handleSigInt);
 
     initscr();
     keypad(stdscr, TRUE);
@@ -177,47 +204,80 @@ void saveToFile(TextBuffer *buffer, char *filename) {
 
 
 void readIntoBuffer(TextBuffer *buffer, char *filename) {
-    char *fileContents = readfile(filename);
-    if (!fileContents) return;
+    FILE *file = fopen(filename, "r");
+    if (!file) return;
 
-    char *line = strtok(fileContents, "\n");
+    char *line = NULL;
+    size_t len = 0;
+    ssize_t read;
     int lineIndex = 0;
 
-    while (line) {
+    while ((read = getline(&line, &len, file)) != -1) {
+        if (read > 0 && line[read - 1] == '\n') {
+            line[read - 1] = '\0';
+            --read;
+        }
+
         if (lineIndex >= buffer->capacity) {
             buffer->capacity *= 2;
             buffer->lines = realloc(buffer->lines, buffer->capacity * sizeof(char*));
-            for (int i = buffer->num_lines; i < buffer->capacity; i++) {
+            for (int i = lineIndex; i < buffer->capacity; i++) {
                 buffer->lines[i] = malloc(INITIAL_CAPACITY * sizeof(char));
-                buffer->lines[i][0] = '\0'; 
+                buffer->lines[i][0] = '\0';
             }
         }
 
-        if (lineIndex == 0 && buffer->num_lines == 1 && buffer->lines[0][0] == '\0') {
-            strcpy(buffer->lines[lineIndex], line);
+        if (lineIndex >= buffer->num_lines) {
+            insertLine(buffer, lineIndex);
+        }
+
+        if (read > 0) {
+            strncpy(buffer->lines[lineIndex], line, INITIAL_CAPACITY - 1);
+            buffer->lines[lineIndex][INITIAL_CAPACITY - 1] = '\0'; 
         } else {
-            if (lineIndex >= buffer->num_lines) {
-                if (lineIndex >= buffer->capacity) {
-                    buffer->capacity *= 2; 
-                    buffer->lines = realloc(buffer->lines, buffer->capacity * sizeof(char*));
-
-                    for (int i = buffer->num_lines; i < buffer->capacity; i++) {
-                        buffer->lines[i] = malloc(INITIAL_CAPACITY * sizeof(char));
-                        buffer->lines[i][0] = '\0';
-                    }
-                }
-                buffer->num_lines = lineIndex + 1; 
-            }
-
-            strcpy(buffer->lines[lineIndex], line);
-            buffer->num_lines++; 
+            buffer->lines[lineIndex][0] = '\0';
         }
 
-        lineIndex++; 
-        line = strtok(NULL, "\n");
+        lineIndex++;
     }
 
-    free(fileContents);
+    buffer->num_lines = lineIndex;
+
+    free(line);
+    fclose(file);
+}
+
+
+
+void searchInBuffer(TextBuffer *buffer, char *query, int *x, int *y, int *scrollOffset, int windowHeight) {
+    for (int i = 0; i < buffer->num_lines; i++) {
+        char *line = buffer->lines[i];
+        char *found = strstr(line, query);
+        if (found) {
+            int lineIndex = i;
+            *x = found - line; 
+            *y = lineIndex - *scrollOffset; 
+
+            if (*y >= windowHeight - 2) { 
+                *scrollOffset += *y - (windowHeight - 2);
+                *y = windowHeight - 2;
+            } else if (*y < 0) {
+                *scrollOffset += *y; 
+                *y = 0; 
+            }
+
+            return;
+        }
+    }
+}
+
+int getNumberNextToc(char *line, int *index) {
+    int num = 0;
+    while (line[*index] >= '0' && line[*index] <= '9') {
+        num = num * 10 + (line[*index] - '0');
+        (*index)++;
+    }
+    return num;
 }
 
 
@@ -232,6 +292,8 @@ int main(int argc, char **argv){
     int c;
 
     TextBuffer *buffer = createTextBuffer();
+    TextBuffer *copyBuffer = createTextBuffer();
+
     if (argc > 1) {
         readIntoBuffer(buffer, argv[1]);
     } else {
@@ -332,6 +394,55 @@ int main(int argc, char **argv){
             saveToFile(buffer, argv[1]);
             fileSaved = true;
             break;
+        case CTRL_KEY('f'):
+            {
+                char query[100];
+                echo(); 
+                mvprintw(height - 1, 0, "Search: "); 
+                getnstr(query, sizeof(query) - 1); 
+                noecho();
+                clear();
+
+                searchInBuffer(buffer, query, &x, &y, &scrollOffset, height - 2); 
+                
+                mvprintw(height - 1, 0, " ");
+                clrtoeol();
+            }
+            break;
+        case ESCAPE:
+        {
+            char command[10];
+            echo(); 
+            mvprintw(height - 1, 0, ":");
+            getnstr(command, sizeof(command) - 1);
+            noecho();
+            clear();
+            char* cmdPtr = command;
+
+            if (command[0] >= '0' && command[0] <= '9') {
+                int numLinesToCopy = atoi(cmdPtr); 
+                while (isdigit((unsigned char)*cmdPtr)) cmdPtr++;
+                if (*cmdPtr == 'c') {
+                    freeTextBuffer(copyBuffer);
+                    copyBuffer = createTextBuffer();
+                    for (int i = 0; i < numLinesToCopy && (realY + i) < buffer->num_lines; i++) {
+                        if (i >= copyBuffer->capacity) insertLine(copyBuffer, i);
+                        strcpy(copyBuffer->lines[i], buffer->lines[realY + i]);
+                    }
+                    copyBuffer->num_lines = numLinesToCopy;
+                }
+            } else if (*cmdPtr == 'p') {
+                for (int i = 0; i < copyBuffer->num_lines; i++) {
+                    insertLine(buffer, realY + i);
+                    strcpy(buffer->lines[realY + i], copyBuffer->lines[i]);
+                }
+            }
+
+            mvprintw(height - 1, 0, " ");
+            clrtoeol();
+        }
+        break;
+
         default:
             if (editing && c >= 32 && c <= 126) { 
                 insertCharacter(buffer, realY, x, c);
@@ -369,6 +480,7 @@ int main(int argc, char **argv){
     }
 
     freeTextBuffer(buffer);
+    freeTextBuffer(copyBuffer);
     endwin();
 
     return 0;

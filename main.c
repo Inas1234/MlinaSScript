@@ -416,7 +416,6 @@ int main(int argc, char **argv){
             mvprintw(height - 1, 0, ":");
             getnstr(command, sizeof(command) - 1);
             noecho();
-            clear();
             char* cmdPtr = command;
 
             if (command[0] >= '0' && command[0] <= '9') {
@@ -438,7 +437,8 @@ int main(int argc, char **argv){
                 }
             }
 
-            mvprintw(height - 1, 0, " ");
+
+            move(height - 1, 0);
             clrtoeol();
         }
         break;
@@ -461,13 +461,23 @@ int main(int argc, char **argv){
             }
             break;
         }
+
+
+
         attron(COLOR_PAIR(1));
-        if (fileSaved) {
-            mvprintw(height - 1, 0, "File saved successfully to %s", argv[1]);
-        } else {
-            mvprintw(height - 1, 0 , "File: %s | Line: %d, Column: %d", argv[1], y + scrollOffset + 1, x + 1);
-        } 
+        move(height - 1, 0);
         clrtoeol();
+
+        char statusMessage[80]; 
+        if (fileSaved) {
+            sprintf(statusMessage, "File saved successfully to %s", argv[1]);
+        } else {
+            sprintf(statusMessage, "File: %s | Line: %d, Column: %d", argv[1], y + scrollOffset + 1, x + 1);
+        }
+        int statusMsgLen = strlen(statusMessage);
+        int statusMsgStart = width - statusMsgLen - 2; 
+
+        mvprintw(height - 1, statusMsgStart, "%s", statusMessage);
         attroff(COLOR_PAIR(1));
 
         refresh();

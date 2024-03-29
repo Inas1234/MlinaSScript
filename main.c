@@ -9,12 +9,25 @@
 #include <ctype.h>
 
 #define CTRL_KEY(k) ((k) & 0x1f)
-
 #define SPACE 32
 #define ENTER 13
 #define ESCAPE 27
-
 #define INITIAL_CAPACITY 1024
+
+typedef enum {
+    KEYWORD,
+    NORMAL,
+    STRING,
+    COMMENT,
+} SyntaxType;
+
+
+const char * keywords[] = {
+    "if", "else", "print", "printf", "cout", "void", "int", "float", "string", "char", "bool"
+    "double", "long", "short", "for", "while", "do", "return", "break", "continue", "switch",
+    "case", "default", "true", "false", "class", "struct",
+};
+
 
 struct termios orig_termios;
 
@@ -83,6 +96,54 @@ void insertLine(TextBuffer *buffer, int y){
 
 }
 
+void drawLineWithSyntaxHighlighting(WINDOW *win, char *line, int y, int lineNumWidth) {
+    char word[256] = {0}; 
+    int word_len = 0;
+    int x = lineNumWidth; 
+    
+    bool isWordChar = false;
+
+    for (int i = 0; line[i] != '\0' || isWordChar; ++i) {
+        char c = line[i];
+        isWordChar = (isalnum(c) || c == '_'); 
+
+        if (isWordChar) {
+            word[word_len++] = c;
+        }
+
+        if (!isWordChar && word_len > 0) {
+            word[word_len] = '\0'; 
+            
+            bool isKeyword = false;
+            for (int k = 0; keywords[k] != NULL; k++) {
+                if (strcmp(word, keywords[k]) == 0) {
+                    isKeyword = true;
+                    break;
+                }
+            }
+
+            if (isKeyword) {
+                wattron(win, COLOR_PAIR(KEYWORD));
+            }
+
+            mvwprintw(win, y, x, "%s", word);
+            
+            if (isKeyword) {
+                wattroff(win, COLOR_PAIR(KEYWORD));
+            }
+
+            word_len = 0;
+
+            x += strlen(word);
+        }
+
+        if (!isWordChar && c != '\0') {
+            mvwaddch(win, y, x++, c);
+        }
+    }
+}
+
+
 void redrawWindow(WINDOW *win, TextBuffer *buffer, int scrollOffset) {
     werase(win); 
     int maxy, maxx;
@@ -90,7 +151,11 @@ void redrawWindow(WINDOW *win, TextBuffer *buffer, int scrollOffset) {
     for (int i = 0; i < maxy && (i + scrollOffset) < buffer->num_lines; i++) {
         int lineNum = i + scrollOffset + 1; 
         mvwprintw(win, i, 0, "%4d ", lineNum); 
+        // char tempLine[INITIAL_CAPACITY];
+        // strncpy(tempLine, buffer->lines[i + scrollOffset], INITIAL_CAPACITY-1);
+        // tempLine[INITIAL_CAPACITY-1] = '\0';
 
+        // drawLineWithSyntaxHighlighting(win, tempLine, i, maxx);
         mvwprintw(win, i, 6, "%s", buffer->lines[i + scrollOffset]); 
     }
     wrefresh(win);
@@ -281,13 +346,26 @@ int getNumberNextToc(char *line, int *index) {
 }
 
 
+void removeLine(TextBuffer *buffer, int y) {
+    if (y >= buffer->num_lines) return; 
+    for (int i = y; i < buffer->num_lines - 1; i++) {
+        strcpy(buffer->lines[i], buffer->lines[i+1]);
+    }
+    buffer->num_lines--;
+}
+
+
 
 int main(int argc, char **argv){
     
     WINDOW *my_win;
     enableRawMode();
     start_color();
-    init_pair(1, COLOR_WHITE, COLOR_BLUE);
+    init_pair(NORMAL, COLOR_WHITE, COLOR_BLUE);
+    init_pair(KEYWORD, COLOR_BLUE, COLOR_BLUE);
+    init_pair(STRING, COLOR_GREEN, COLOR_BLUE);
+    init_pair(COMMENT, COLOR_YELLOW, COLOR_BLUE);
+
 
     int c;
 
@@ -429,6 +507,18 @@ int main(int argc, char **argv){
                         strcpy(copyBuffer->lines[i], buffer->lines[realY + i]);
                     }
                     copyBuffer->num_lines = numLinesToCopy;
+                }
+                else if (*cmdPtr == 'd'){
+                    freeTextBuffer(copyBuffer);
+                    copyBuffer = createTextBuffer();
+                    for (int i = 0; i < numLinesToCopy && (realY + i) < buffer->num_lines; i++) {
+                        if (i >= copyBuffer->capacity) insertLine(copyBuffer, i);
+                        strcpy(copyBuffer->lines[i], buffer->lines[realY + i]);
+                    }
+                    copyBuffer->num_lines = numLinesToCopy;
+                    for (int i = 0; i < numLinesToCopy && (realY + i) < buffer->num_lines; i++) {
+                        removeLine(buffer, realY);
+                    }
                 }
             } else if (*cmdPtr == 'p') {
                 for (int i = 0; i < copyBuffer->num_lines; i++) {

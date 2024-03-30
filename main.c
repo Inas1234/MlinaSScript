@@ -365,6 +365,7 @@ int main(int argc, char **argv){
     init_pair(KEYWORD, COLOR_BLUE, COLOR_BLUE);
     init_pair(STRING, COLOR_GREEN, COLOR_BLUE);
     init_pair(COMMENT, COLOR_YELLOW, COLOR_BLUE);
+    init_pair(5, COLOR_BLACK, COLOR_WHITE); // New pair for status window background
 
 
     int c;
@@ -386,7 +387,16 @@ int main(int argc, char **argv){
     int width, height;
     getmaxyx(stdscr, height, width);
 
-    my_win = create_newwin(height - 2, width - 2, y, x);
+    my_win = create_newwin(height - 3, width - 2, y, x);
+    int status_height = 1;
+    int status_width = width; 
+    int status_starty = height - 2;
+    int status_startx = 0;
+
+    WINDOW *status_win = create_newwin(status_height, status_width, status_starty, status_startx);
+    wbkgd(status_win, COLOR_PAIR(5) | ' ');
+    wrefresh(status_win);
+
     wmove(my_win, y, x);
     wrefresh(my_win);
     while(1){
@@ -409,7 +419,7 @@ int main(int argc, char **argv){
                 insertLine(buffer, realY + 1);
             }
 
-            if (y >= height - 3) {
+            if (y >= height - 4) {
                 scrollOffset++;
             } else {
                 y++;
@@ -448,7 +458,7 @@ int main(int argc, char **argv){
             break;
         case KEY_DOWN:
             if (realY < buffer->num_lines - 1) { 
-                if (y < height - 3) {
+                if (y < height - 4) {
                     y++;
                 } else {
                     scrollOffset++; 
@@ -539,7 +549,7 @@ int main(int argc, char **argv){
                 x++;
                 if (x >= width - 2) { 
                     x = 0;
-                    if (y >= height - 3) {
+                    if (y >= height - 4) {
                         scrollOffset++;
                     } else {
                         y++;
@@ -554,23 +564,21 @@ int main(int argc, char **argv){
 
 
 
-        attron(COLOR_PAIR(1));
-        move(height - 1, 0);
-        clrtoeol();
-
-        char statusMessage[80]; 
+        werase(status_win);
+        mvwhline(my_win, height - 3, 1, 0, width - 4);
+        wrefresh(my_win); 
+        char statusMessage[80];
         if (fileSaved) {
-            sprintf(statusMessage, "File saved successfully to %s", argv[1]);
+            snprintf(statusMessage, sizeof(statusMessage), "File saved successfully to %s", argv[1]);
         } else {
-            sprintf(statusMessage, "File: %s | Line: %d, Column: %d", argv[1], y + scrollOffset + 1, x + 1);
+            snprintf(statusMessage, sizeof(statusMessage), "File: %s | Line: %d, Column: %d", argv[1], y + scrollOffset + 1, x + 1);
         }
-        int statusMsgLen = strlen(statusMessage);
-        int statusMsgStart = width - statusMsgLen - 2; 
 
-        mvprintw(height - 1, statusMsgStart, "%s", statusMessage);
-        attroff(COLOR_PAIR(1));
+        //int statusMsgStart = status_width - strlen(statusMessage) - 1; 
 
-        refresh();
+        mvwprintw(status_win, 0, 0, "%s", statusMessage);
+
+        wrefresh(status_win);
         
         redrawWindow(my_win, buffer, scrollOffset);
         wmove(my_win, y, x + 6);
@@ -581,6 +589,7 @@ int main(int argc, char **argv){
 
     freeTextBuffer(buffer);
     freeTextBuffer(copyBuffer);
+    delwin(status_win);
     endwin();
 
     return 0;
